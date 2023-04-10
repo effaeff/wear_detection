@@ -20,7 +20,7 @@ from torchvision.transforms import ToTensor, Normalize, Compose
 from sklearn.model_selection import train_test_split
 
 from sklearn.metrics import jaccard_score
-
+from torchmetrics import JaccardIndex
 
 class WearDataset(torch.utils.data.Dataset):
     """PyTorch Dataset to store grain data"""
@@ -75,6 +75,7 @@ class DataProcessor():
         self.processed_dir = self.config['processed_dir']
         self.results_dir = self.config['results_dir']
         self.data_lbls = self.config['data_labels']
+        self.output_size = self.config.get('output_size', 3)
 
         if not any(
             Path(f'{self.processed_dir}/train/{self.data_lbls[0]}/1').iterdir()
@@ -167,43 +168,49 @@ class DataProcessor():
     def get_batches(self):
         return self.train_data
 
-    def validate(self, evaluate, epoch_idx):
+    def validate(self, evaluate, epoch_idx, train=True):
         print("Start validation...")
 
-        Path(
-            '{}/epoch{}'.format(self.results_dir, epoch_idx)
-        ).mkdir(parents=True, exist_ok=True)
+        if train:
+            Path(
+                '{}/epoch{}'.format(self.results_dir, epoch_idx)
+            ).mkdir(parents=True, exist_ok=True)
 
+        jacc = JaccardIndex(num_classes=self.output_size, task='multitask')
         acc = []
         for batch_idx, batch in enumerate(self.test_data):
             inp = batch['F']
             out = batch['T']
-            pred_out = evaluate(inp)
-
-            # local_acc = jaccard_score(
-                # torch.argmax(out, dim=1).flatten(),
-                # torch.argmax(pred_out, dim=1).flatten().cpu(),
-                # average='macro'
-            # )
-            # print(local_acc)
-            # acc.append(local_acc)
+            pred_out, pred_edges = evaluate(inp)
 
             for image_idx, image in enumerate(pred_out):
                 inp_image = inp[image_idx].permute(1, 2, 0)
                 inp_image = (inp_image - inp_image.min()) / (inp_image.max() - inp_image.min())
                 out_image = torch.argmax(out[image_idx], dim=0)
                 pred_out_image = torch.argmax(image, dim=0).cpu()
+                pred_edges_image = pred_edges[image_idx].cpu()
 
                 save_idx = batch_idx * self.batch_size + image_idx
 
-                acc.append((out_image == pred_out_image).float().mean().item() * 100.0)
+                acc.append(jacc(pred_out_image, out_image))
 
-                save_idx = batch_idx * self.batch_size + image_idx
-                self.plot_results(
-                    [inp_image, pred_out_image, out_image],
-                    ['Input', 'Output', 'Target'],
-                    f'{self.results_dir}/epoch{epoch_idx}/pred_{save_idx}.png'
-                )
+                if train:
+                    im_path = f'{self.results_dir}/epoch{epoch_idx}/pred_{save_idx:03d}'
+                    Path(im_path).mkdir(parents=True, exist_ok=True)
+                    self.plot_results(
+                        [
+                            inp_image,
+                            pred_out_image,
+                            out_image,
+                            pred_edges_image
+                        ],
+                        ['Input', 'Prediction', 'Target', 'Pred edges'],
+                        f'{im_path}/{save_idx:03d}.png'
+                    )
+                    np.save(f'{im_path}/input.npy', inp_image)
+                    np.save(f'{im_path}/pred.npy', pred_out_image)
+                    np.save(f'{im_path}/target.npy', out_image)
+                    np.save(f'{im_path}/pred_edges.npy', pred_edges_image)
 
         return np.mean(acc), np.std(acc)
 

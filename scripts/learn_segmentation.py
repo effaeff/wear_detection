@@ -3,10 +3,12 @@
 import shutil
 import misc
 
-from pytorchutils.fcn8s import FCNModel as VGGModel
+# from pytorchutils.fcn8s import FCNModel as VGGModel
+from pytorchutils.ahg import AHGModel
 # from pytorchutils.fcn_resnet import FCNModel as ResNet
 from weardetection.dataprocessor import DataProcessor
 from weardetection.trainer import Trainer
+from pytorchutils.globals import nn
 
 from config import (
     DATA_DIR,
@@ -34,11 +36,12 @@ def main():
     )
 
     data_processor = DataProcessor(data_config)
-    model = VGGModel(model_config)
+    # model = VGGModel(model_config)
+    model = nn.DataParallel(AHGModel(model_config))
     trainer = Trainer(model_config, model, data_processor)
     trainer.get_batches_fn = data_processor.get_batches
-    # trainer.train(validate_every=1, save_every=2)
-    trainer.infer(INFER_DIR)
+    trainer.train(validate_every=5, save_every=1)
+    # trainer.infer(INFER_DIR)
 
 if __name__ == '__main__':
     misc.to_local_dir(__file__)

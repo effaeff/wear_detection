@@ -25,9 +25,10 @@ class Trainer(BasicTrainer):
             inp = batch['F']
             out = batch['T']
 
-            pred_out = self.model(inp.to(DEVICE))
+            pred_out, pred_edges = self.model(inp.to(DEVICE))
 
             pred_out = torch.sigmoid(pred_out)
+            pred_edges = torch.sigmoid(pred_edges)
 
             batch_loss = self.loss(
                 pred_out,
@@ -56,7 +57,8 @@ class Trainer(BasicTrainer):
             else:
                 self.model.eval()
 
-            pred_out = self.model(inp.to(DEVICE))
+            pred_out, pred_edges = self.model(inp.to(DEVICE))
             pred_out = torch.sigmoid(pred_out)
+            pred_edges = torch.sigmoid(pred_edges)
 
             return pred_out
