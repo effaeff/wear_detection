@@ -16,13 +16,15 @@ from pytorchutils.globals import nn
 from pytorchutils.globals import torch
 
 from torch.utils.data import DataLoader
-from torchvision.transforms import ToTensor, Normalize, Compose, functional
+from torchvision.transforms import ToTensor, Normalize, Compose, functional, Resize, CenterCrop
 from sklearn.model_selection import train_test_split
 
 from tqdm import tqdm
 
 from torchmetrics import JaccardIndex
-from config import PROCESSED_DIM
+from torchmetrics.functional.classification import jaccard_index
+from sklearn.metrics import jaccard_score
+from config import PROCESSED_DIM, RESIZE_SIZE
 
 class WearDataset(torch.utils.data.Dataset):
     """PyTorch Dataset to store grain data"""
@@ -34,40 +36,68 @@ class WearDataset(torch.utils.data.Dataset):
                 # Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             # ])
         # )
+
+        self.path_features = path_features
+        self.path_target = path_target
+
         self.transform = Compose([
             ToTensor(),
-            Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            CenterCrop(PROCESSED_DIM[0]),
+            # CenterCrop(PROCESSED_DIM)
+            Resize(RESIZE_SIZE)
+            # Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        f_names = sorted(os.listdir(f'{path_features}/1'), key=lambda name: int(name.split('_')[0]))
-        self.data_features = np.array([
-            np.array(Image.open(f'{path_features}/1/{f_name}'))
-            for f_name in f_names
+        self.target_transform = Compose([
+            # CenterCrop(PROCESSED_DIM)
+            CenterCrop(PROCESSED_DIM[0]),
+            Resize(RESIZE_SIZE)
         ])
-        t_names = sorted(os.listdir(f'{path_target}/1'), key=lambda name: int(name.split('_')[0]))
-        self.data_targets = None
-        if path_target is not None:
-            self.data_targets = np.array([
-                np.load(f'{path_target}/1/{t_name}')
-                for t_name in t_names
-            ])
+
+        self.f_names = sorted(
+            os.listdir(f'{path_features}/1'), key=lambda name: int(re.search('\d+', name.split('_')[2]).group())
+        )
+        # self.f_names = sorted(
+            # os.listdir(f'{path_features}/1'), key=lambda name: int(name.split('_')[0])
+        # )
+        # self.data_features = [
+            # # np.array(Image.open(f'{path_features}/1/{f_name}'))
+            # Image.open(f'{path_features}/1/{f_name}')
+            # for f_name in f_names
+        # ]
+        self.t_names = sorted(
+            os.listdir(f'{path_target}/1'), key=lambda name: int(re.search('\d+', name.split('_')[2]).group())
+        )
+        # self.t_names = sorted(
+            # os.listdir(f'{path_target}/1'), key=lambda name: int(name.split('_')[0])
+        # )
+        # self.data_targets = None
+        # if path_target is not None:
+            # self.data_targets = np.array([
+                # np.load(f'{path_target}/1/{t_name}')
+                # for t_name in t_names
+            # ])
 
     def __getitem__(self, index):
-        features = functional.center_crop(self.transform(self.data_features[index]), PROCESSED_DIM)
+        features = Image.open(
+            f'{self.path_features}/1/{self.f_names[index]}'
+        )
+        features = self.transform(features).float()
 
         targets = []
-        if self.data_targets is not None:
-            targets = self.data_targets[index]
-            targets = functional.center_crop(
-                nn.functional.one_hot(torch.LongTensor(targets), num_classes=3).permute(2, 0, 1).float(),
-                PROCESSED_DIM
-            )
+        if self.path_target is not None:
+            targets = np.load(f'{self.path_target}/1/{self.t_names[index]}')
+            targets = nn.functional.one_hot(
+                torch.LongTensor(targets),
+                num_classes=3
+            ).permute(2, 0, 1).float()
+            targets = self.target_transform(targets)
+            targets = torch.argmax(targets, dim=0)
 
         item = {'F': features, 'T': targets}
         return item
 
     def __len__(self):
-        return len(self.data_features) # Assume that both datasets have equal length
-
+        return len(self.f_names) # Assume that both datasets have equal length
 
 class DataProcessor():
     """Class for data processor"""
@@ -173,43 +203,67 @@ class DataProcessor():
     def get_batches(self):
         return self.train_data
 
-    def validate(self, evaluate, epoch_idx, train=True):
-        print("Start validation...")
+    def validate(self, evaluate, epoch_idx, save_eval, verbose, save_suffix):
+        if verbose:
+            print("Start validation...")
 
-        if train:
+        if save_eval:
             Path(
                 '{}/epoch{}'.format(self.results_dir, epoch_idx)
             ).mkdir(parents=True, exist_ok=True)
 
-        jacc = JaccardIndex(num_classes=self.output_size, task='multiclass')
+        jacc = JaccardIndex(num_classes=3, task='multiclass', average=None)
         acc = []
-        for batch_idx, batch in enumerate(tqdm(self.test_data)):
+        # for batch_idx, batch in enumerate(tqdm(self.test_data)):
+        for batch_idx, batch in enumerate(self.test_data):
             inp = batch['F']
             out = batch['T']
-            # pred_out, pred_edges = evaluate(inp)
-            pred_out = evaluate(inp)
+            pred_out, pred_edges = evaluate(inp)
+            # pred_out = evaluate(inp)
 
             for image_idx, image in enumerate(pred_out):
                 inp_image = inp[image_idx].permute(1, 2, 0)
-                inp_image = (inp_image - inp_image.min()) / (inp_image.max() - inp_image.min())
-                out_image = torch.argmax(out[image_idx], dim=0)
+                # inp_image = (inp_image - inp_image.min()) / (inp_image.max() - inp_image.min())
+                # out_image = torch.argmax(out[image_idx], dim=0)
+                out_image = out[image_idx]
                 pred_out_image = torch.argmax(image, dim=0).cpu()
                 # pred_edges_image = pred_edges[image_idx].cpu()
 
                 save_idx = batch_idx * self.batch_size + image_idx
 
-                acc.append(jacc(pred_out_image, out_image))
+                iou_sk = jaccard_score(
+                    out_image.flatten(),
+                    pred_out_image.flatten(),
+                    labels=[0, 1, 2],
+                    average=None,
+                    zero_division=0
+                )
+                iou_tm = jaccard_index(
+                    pred_out_image,
+                    out_image,
+                    task='multiclass',
+                    num_classes=3,
+                    average=None
+                )
+                # print(f"sk: {iou_sk}\ttm: {iou_tm}")
+                # iou = jacc(pred_out_image, out_image)
+                for label in range(3):
+                    if label not in torch.unique(out_image):
+                       iou_tm[label] = torch.nan
 
-                target = out_image.cpu().detach().numpy()
-                target_edges = np.zeros(target.shape)
-                for label in range(np.max(target)):
-                    local_target = target.copy()
-                    local_target[np.where(target==label+1)] = 0
-                    local_blur = cv2.GaussianBlur((local_target*255).astype('uint8'), (5, 5), 0)
-                    local_edges = cv2.Canny(local_blur, 100, 200) / 255
-                    target_edges += local_edges
+                acc.append(torch.nanmean(iou_tm))
+                # acc.append(iou)
 
-                if train:
+                if save_eval:
+                    target = out_image.cpu().detach().numpy()
+                    target_edges = np.zeros(target.shape)
+                    for label in range(np.max(target)):
+                        local_target = target.copy()
+                        local_target[np.where(target==label+1)] = 0
+                        local_blur = cv2.GaussianBlur((local_target*255).astype('uint8'), (5, 5), 0)
+                        local_edges = cv2.Canny(local_blur, 100, 200) / 255
+                        target_edges += local_edges
+
                     im_path = f'{self.results_dir}/epoch{epoch_idx}/pred_{save_idx:03d}'
                     Path(im_path).mkdir(parents=True, exist_ok=True)
                     self.plot_results(
@@ -229,7 +283,9 @@ class DataProcessor():
                     # np.save(f'{im_path}/pred_edges.npy', pred_edges_image)
                     np.save(f'{im_path}/target_edges.npy', target_edges)
 
-        return np.mean(acc), np.std(acc)
+        if verbose:
+            print(f"Validation error: {np.mean(acc)*100.0:.2f} % +- {np.std(acc)*100.0:.2f}")
+        return np.mean(acc) * 100.0, np.std(acc) * 100.0
 
     def infer(self, evaluate, infer_dir):
         """Inference method"""

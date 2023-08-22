@@ -13,7 +13,7 @@ class Trainer(BasicTrainer):
     def __init__(self, config, model, dataprocessor):
         BasicTrainer.__init__(self, config, model, dataprocessor)
 
-    def learn_from_epoch(self, epoch_idx):
+    def learn_from_epoch(self, epoch_idx, verbose):
         """Training method"""
         epoch_loss = 0
         try:
@@ -23,22 +23,24 @@ class Trainer(BasicTrainer):
                 "Error: No nb_batches_fn defined in preprocessor. "
                 "This attribute is required by the training routine."
             )
-        pbar = tqdm(batches, desc=f'Epoch {epoch_idx}', unit='batch')
-        for batch_idx, batch in enumerate(pbar):
+        if verbose:
+            batches = tqdm(batches, desc=f'Epoch {epoch_idx}', unit='batch')
+        for batch_idx, batch in enumerate(batches):
             inp = batch['F']
             out = batch['T']
 
-            # pred_out, pred_edges = self.model(inp.to(DEVICE))
-            pred_out = self.model(inp.to(DEVICE))
+            pred_out, pred_edges = self.model(inp.to(DEVICE))
+            # pred_out = self.model(inp.to(DEVICE))
 
-            pred_out = torch.sigmoid(pred_out)
+            # pred_out = torch.sigmoid(pred_out)
             # pred_edges = torch.sigmoid(pred_edges)
 
             # out_border = torch.empty(
                 # (out.size()[0], out.size()[-2], out.size()[-1])
             # )
             # for idx, image in enumerate(out):
-                # target = np.argmax(image.cpu().detach().numpy(), axis=0)
+                # # target = np.argmax(image.cpu().detach().numpy(), axis=0)
+                # target = image.cpu().detach().numpy()
 
                 # target_edges = np.zeros(target.shape)
                 # for label in range(np.max(target)):
@@ -64,7 +66,8 @@ class Trainer(BasicTrainer):
             self.optimizer.step()
 
             epoch_loss += batch_loss.item()
-            pbar.set_postfix(batch_loss=batch_loss.item(), epoch_loss=epoch_loss/(batch_idx+1))
+            if verbose:
+                batches.set_postfix(batch_loss=batch_loss.item(), epoch_loss=epoch_loss)
         epoch_loss /= len(batches)
 
         return epoch_loss
@@ -82,9 +85,9 @@ class Trainer(BasicTrainer):
             else:
                 self.model.eval()
 
-            # pred_out, pred_edges = self.model(inp.to(DEVICE))
-            pred_out = self.model(inp.to(DEVICE))
-            pred_out = torch.sigmoid(pred_out)
+            pred_out, pred_edges = self.model(inp.to(DEVICE))
+            # pred_out = self.model(inp.to(DEVICE))
+            # pred_out = torch.sigmoid(pred_out)
             # pred_edges = torch.sigmoid(pred_edges)
 
-            return pred_out#, pred_edges
+            return pred_out, pred_edges
